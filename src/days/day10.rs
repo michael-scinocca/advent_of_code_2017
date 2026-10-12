@@ -64,7 +64,7 @@ fn reverse(data: &mut [u32], start: usize, length: usize) {
     }
 }
 
-fn get_hash(data: &mut [u32], input: &str) -> String {
+pub fn get_hash(data: &mut [u32], input: &str) -> String {
     let actions = [input.as_bytes(), &[17, 31, 73, 47, 23]].concat();
 
     process_data(data, &actions, 64);
