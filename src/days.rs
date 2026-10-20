@@ -14,6 +14,7 @@ mod day6;
 mod day7;
 mod day8;
 mod day9;
+mod day17;
 
 pub fn run_day_part(day: i32, part: i32) {
     match (day, part) {
@@ -49,6 +50,8 @@ pub fn run_day_part(day: i32, part: i32) {
         (15, 2) => day15::part2(),
         (16, 1) => day16::part1(),
         (16, 2) => day16::part2(),
+        (17, 1) => day17::part1(),
+        (17, 2) => day17::part2(),
         _ => (),
     }
 }
