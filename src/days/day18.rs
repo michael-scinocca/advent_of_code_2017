@@ -75,64 +75,36 @@ impl Program {
 
         self.program = program_lines
             .filter_map(|l| {
-                if let Some(next) = l.strip_prefix("snd ") {
-                    return Some(Instruction::Snd {
-                        reg: next.trim().to_string(),
-                    });
+                let mut parts = l.split_whitespace();
+                match parts.next()? {
+                    "snd" => Some(Instruction::Snd {
+                        reg: parts.next()?.to_string(),
+                    }),
+                    "set" => Some(Instruction::Set {
+                        reg: parts.next()?.to_string(),
+                        reg_or_val: parts.next()?.parse().unwrap(),
+                    }),
+                    "add" => Some(Instruction::Add {
+                        reg: parts.next()?.to_string(),
+                        reg_or_val: parts.next()?.parse().unwrap(),
+                    }),
+                    "mul" => Some(Instruction::Mul {
+                        reg: parts.next()?.to_string(),
+                        reg_or_val: parts.next()?.parse().unwrap(),
+                    }),
+                    "mod" => Some(Instruction::Mod {
+                        reg: parts.next()?.to_string(),
+                        reg_or_val: parts.next()?.parse().unwrap(),
+                    }),
+                    "rcv" => Some(Instruction::Rcv {
+                        reg_or_val: parts.next()?.to_string(),
+                    }),
+                    "jgz" => Some(Instruction::Jgz {
+                        check_reg_or_val: parts.next()?.to_string(),
+                        jmp_reg_or_val: parts.next()?.parse().unwrap(),
+                    }),
+                    _ => None,
                 }
-
-                if let Some(next) = l.strip_prefix("set ") {
-                    let mut parts = next.split(' ');
-
-                    return Some(Instruction::Set {
-                        reg: parts.next().unwrap().to_string(),
-                        reg_or_val: parts.next().unwrap().parse().unwrap(),
-                    });
-                }
-
-                if let Some(next) = l.strip_prefix("add ") {
-                    let mut parts = next.split(' ');
-
-                    return Some(Instruction::Add {
-                        reg: parts.next().unwrap().to_string(),
-                        reg_or_val: parts.next().unwrap().parse().unwrap(),
-                    });
-                }
-
-                if let Some(next) = l.strip_prefix("mul ") {
-                    let mut parts = next.split(' ');
-
-                    return Some(Instruction::Mul {
-                        reg: parts.next().unwrap().to_string(),
-                        reg_or_val: parts.next().unwrap().parse().unwrap(),
-                    });
-                }
-
-                if let Some(next) = l.strip_prefix("mod ") {
-                    let mut parts = next.split(' ');
-
-                    return Some(Instruction::Mod {
-                        reg: parts.next().unwrap().to_string(),
-                        reg_or_val: parts.next().unwrap().parse().unwrap(),
-                    });
-                }
-
-                if let Some(next) = l.strip_prefix("rcv ") {
-                    return Some(Instruction::Rcv {
-                        reg_or_val: next.trim().to_string(),
-                    });
-                }
-
-                if let Some(next) = l.strip_prefix("jgz ") {
-                    let mut parts = next.split(' ');
-
-                    return Some(Instruction::Jgz {
-                        check_reg_or_val: parts.next().unwrap().to_string(),
-                        jmp_reg_or_val: parts.next().unwrap().parse().unwrap(),
-                    });
-                }
-
-                None
             })
             .collect();
 
@@ -262,15 +234,12 @@ impl Program {
     }
 
     fn advance_program_counter(&mut self, step: isize) -> bool {
-        let (new_val, overflowed) = self.program_counter.overflowing_add_signed(step);
-
-        if overflowed {
-            return false;
+        if let Some(new_val) = self.program_counter.checked_add_signed(step) {
+            self.program_counter = new_val;
+            self.program_counter < self.program.len()
+        } else {
+            false
         }
-
-        self.program_counter = new_val;
-
-        self.program_counter < self.program.len()
     }
 
     fn get_reg_val_or_val(&self, reg_or_val: &str) -> i64 {
