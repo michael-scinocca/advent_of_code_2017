@@ -1,4 +1,7 @@
-use std::collections::HashMap;
+use std::{
+    collections::{HashMap, VecDeque},
+    sync::{Arc, Mutex},
+};
 
 #[derive(Debug)]
 enum Instruction {
@@ -31,23 +34,39 @@ enum Instruction {
 }
 
 struct Program {
+    pid: i64,
     registers: HashMap<String, i64>,
-    last_frequency: i64,
     program: Vec<Instruction>,
     program_counter: usize,
+    last_frequency: i64,
+    send_count: i64,
+    is_receiving: bool,
+    incoming: Arc<Mutex<VecDeque<i64>>>,
+    outgoing: Option<Arc<Mutex<VecDeque<i64>>>>,
 }
 
 impl Program {
-    fn new() -> Self {
-        Program {
+    fn new(pid: i64) -> Self {
+        let mut program = Program {
+            pid,
             registers: HashMap::new(),
-            last_frequency: 0,
             program: Vec::new(),
             program_counter: 0,
+            last_frequency: 0,
+            send_count: 0,
+            is_receiving: false,
+            incoming: Arc::new(Mutex::new(VecDeque::new())),
+            outgoing: None,
+        };
+
+        if pid >= 0 {
+            program.registers.insert("p".to_string(), pid);
         }
+
+        program
     }
 
-    fn load(&mut self, program: &str) {
+    fn load(&mut self, program: &str, outgoing: Option<Arc<Mutex<VecDeque<i64>>>>) {
         let program_lines = program
             .trim()
             .lines()
@@ -116,91 +135,128 @@ impl Program {
                 None
             })
             .collect();
+
+        if outgoing.is_none() {
+            self.outgoing = Some(self.incoming.clone())
+        } else {
+            self.outgoing = outgoing;
+        }
     }
 
-    fn run(&mut self) -> i64 {
+    fn run(&mut self) {
         self.program_counter = 0;
 
         loop {
-            let continue_processing = match &self.program[self.program_counter] {
-                Instruction::Snd { reg } => {
-                    if let Some(val) = self.registers.get(reg) {
-                        self.last_frequency = *val;
-                    }
+            if !self.step() {
+                break;
+            }
+        }
+    }
 
-                    self.advance_program_counter(1)
+    fn step(&mut self) -> bool {
+        self.is_receiving = false;
+
+        match &self.program[self.program_counter] {
+            Instruction::Snd { reg } => {
+                if let Some(val) = self.registers.get(reg)
+                    && let Some(outgoing) = &mut self.outgoing
+                {
+                    let mut outgoing = outgoing.lock().unwrap();
+                    outgoing.push_back(*val);
+                    self.send_count += 1;
                 }
-                Instruction::Set { reg, reg_or_val } => {
-                    let value = self.get_reg_val_or_val(reg_or_val);
 
-                    if let Some(val) = self.registers.get_mut(reg) {
-                        *val = value;
-                    } else {
-                        self.registers.insert(reg.clone(), value);
-                    }
+                self.advance_program_counter(1)
+            }
+            Instruction::Set { reg, reg_or_val } => {
+                let value = self.get_reg_val_or_val(reg_or_val);
 
-                    self.advance_program_counter(1)
+                if let Some(val) = self.registers.get_mut(reg) {
+                    *val = value;
+                } else {
+                    self.registers.insert(reg.clone(), value);
                 }
-                Instruction::Add { reg, reg_or_val } => {
-                    let value = self.get_reg_val_or_val(reg_or_val);
 
-                    if let Some(val) = self.registers.get_mut(reg) {
-                        *val += value;
-                    } else {
-                        self.registers.insert(reg.clone(), value);
-                    }
+                self.advance_program_counter(1)
+            }
+            Instruction::Add { reg, reg_or_val } => {
+                let value = self.get_reg_val_or_val(reg_or_val);
 
-                    self.advance_program_counter(1)
+                if let Some(val) = self.registers.get_mut(reg) {
+                    *val += value;
+                } else {
+                    self.registers.insert(reg.clone(), value);
                 }
-                Instruction::Mul { reg, reg_or_val } => {
-                    let value = self.get_reg_val_or_val(reg_or_val);
 
-                    if let Some(val) = self.registers.get_mut(reg) {
-                        *val *= value;
-                    } else {
-                        self.registers.insert(reg.clone(), 0);
-                    }
+                self.advance_program_counter(1)
+            }
+            Instruction::Mul { reg, reg_or_val } => {
+                let value = self.get_reg_val_or_val(reg_or_val);
 
-                    self.advance_program_counter(1)
+                if let Some(val) = self.registers.get_mut(reg) {
+                    *val *= value;
+                } else {
+                    self.registers.insert(reg.clone(), 0);
                 }
-                Instruction::Mod { reg, reg_or_val } => {
-                    let value = self.get_reg_val_or_val(reg_or_val);
 
-                    if let Some(val) = self.registers.get_mut(reg) {
-                        *val %= value;
-                    } else {
-                        self.registers.insert(reg.clone(), 0);
-                    }
+                self.advance_program_counter(1)
+            }
+            Instruction::Mod { reg, reg_or_val } => {
+                let value = self.get_reg_val_or_val(reg_or_val);
 
-                    self.advance_program_counter(1)
+                if let Some(val) = self.registers.get_mut(reg) {
+                    *val %= value;
+                } else {
+                    self.registers.insert(reg.clone(), 0);
                 }
-                Instruction::Rcv { reg_or_val } => {
-                    let value = self.get_reg_val_or_val(reg_or_val);
 
+                self.advance_program_counter(1)
+            }
+            Instruction::Rcv { reg_or_val } => {
+                let value = self.get_reg_val_or_val(reg_or_val);
+
+                if self.pid < 0 {
                     if value != 0 {
-                        break self.last_frequency;
+                        let mut incoming = self.incoming.lock().unwrap();
+                        self.last_frequency = incoming.pop_back().unwrap_or(0);
+                        false
                     } else {
                         self.advance_program_counter(1)
                     }
-                }
-                Instruction::Jgz {
-                    check_reg_or_val,
-                    jmp_reg_or_val,
-                } => {
-                    let check_value = self.get_reg_val_or_val(check_reg_or_val);
+                } else {
+                    let mut incoming = self.incoming.lock().unwrap();
 
-                    if check_value > 0 {
-                        let jmp_value = self.get_reg_val_or_val(jmp_reg_or_val);
-
-                        self.advance_program_counter(jmp_value as isize)
+                    if incoming.is_empty() {
+                        self.is_receiving = true;
+                        true
                     } else {
+                        let received = incoming.pop_front().unwrap();
+
+                        drop(incoming);
+
+                        if let Some(val) = self.registers.get_mut(reg_or_val) {
+                            *val = received;
+                        } else {
+                            self.registers.insert(reg_or_val.clone(), received);
+                        }
+
                         self.advance_program_counter(1)
                     }
                 }
-            };
+            }
+            Instruction::Jgz {
+                check_reg_or_val,
+                jmp_reg_or_val,
+            } => {
+                let check_value = self.get_reg_val_or_val(check_reg_or_val);
 
-            if !continue_processing {
-                break 0;
+                if check_value > 0 {
+                    let jmp_value = self.get_reg_val_or_val(jmp_reg_or_val);
+
+                    self.advance_program_counter(jmp_value as isize)
+                } else {
+                    self.advance_program_counter(1)
+                }
             }
         }
     }
@@ -227,15 +283,40 @@ impl Program {
 pub fn part1() {
     let program_text = std::fs::read_to_string("data/day18.txt").unwrap();
 
-    let mut program = Program::new();
-    program.load(&program_text);
+    let mut program = Program::new(-1);
+    program.load(&program_text, None);
 
-    let result = program.run();
+    program.run();
 
-    println!("{}", result);
+    println!("{}", program.last_frequency);
 }
 
-pub fn part2() {}
+pub fn part2() {
+    let program_text = std::fs::read_to_string("data/day18.txt").unwrap();
+
+    let mut program0 = Program::new(0);
+    let mut program1 = Program::new(1);
+
+    program0.load(&program_text, Some(program1.incoming.clone()));
+    program1.load(&program_text, Some(program0.incoming.clone()));
+
+    loop {
+        let mut continue_processing = false;
+
+        continue_processing |= program0.step();
+        continue_processing |= program1.step();
+
+        if program0.is_receiving && program1.is_receiving {
+            continue_processing = false;
+        }
+
+        if !continue_processing {
+            break;
+        }
+    }
+
+    println!("{}", program1.send_count);
+}
 
 #[cfg(test)]
 mod tests {
@@ -243,7 +324,7 @@ mod tests {
 
     #[test]
     fn test1() {
-        let mut program = Program::new();
+        let mut program = Program::new(-1);
         program.load(
             r"
             set a 1
@@ -257,10 +338,11 @@ mod tests {
             set a 1
             jgz a -2
         ",
+            None,
         );
 
-        let result = program.run();
+        program.run();
 
-        assert_eq!(4, result);
+        assert_eq!(4, program.last_frequency);
     }
 }
