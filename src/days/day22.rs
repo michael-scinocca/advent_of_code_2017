@@ -22,7 +22,7 @@ pub fn part1() {
 
 pub fn part2() {
     let input = std::fs::read_to_string("data/day22.txt").unwrap();
-    
+
     let (mut location_map, mut location) = process_input(&input);
 
     let infections = run_bursts(
